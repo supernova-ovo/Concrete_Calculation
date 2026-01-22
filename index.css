@@ -1,0 +1,9 @@
+/* 基础样式 - 已通过 Tailwind CSS 和行内样式处理 */
+/* 此文件可以为空，或添加自定义样式 */
+
+/* 优化滚动条：使用 thin 滚动条，减少视觉干扰 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
+}
+
