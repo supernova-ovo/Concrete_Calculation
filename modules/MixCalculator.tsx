@@ -439,6 +439,8 @@ export const MixCalculator: React.FC = () => {
 
 
 
+  // 正式上线时已注释掉测试数据加载功能
+  /*
   const loadExcelDebugCase = () => {
     // 强制加载 Excel 调试数据 (硬编码)
     const EXCEL_DEBUG_CASE = {
@@ -573,6 +575,7 @@ export const MixCalculator: React.FC = () => {
     // 提示用户
     // alert("已加载 Excel 调试数据 (详细模式)！\n请点击 '标准计算' 查看结果。");
   };
+  */
 
   const handleStdCalculate = () => {
     // 根据当前模式决定使用哪个数据源
@@ -857,7 +860,8 @@ export const MixCalculator: React.FC = () => {
                   <div className="text-xs text-concrete-600 mb-2">
                     <strong>强度等级和坍落度：</strong>请在下方输入
                   </div>
-                  <Button
+                  {/* 正式上线时已注释掉测试数据加载功能 */}
+                  {/* <Button
                     variant="outline"
                     size="sm"
                     onClick={loadExcelDebugCase}
@@ -865,7 +869,7 @@ export const MixCalculator: React.FC = () => {
                   >
                     <AlertTriangle className="w-3 h-3 mr-1" />
                     加载 Excel 案例数据 (调试用)
-                  </Button>
+                  </Button> */}
                   <div className="grid grid-cols-2 gap-2">
                     <Select
                       label="强度等级"
