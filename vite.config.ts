@@ -59,6 +59,7 @@ export default defineConfig(({ mode }) => {
     }
     
     return {
+      base: './', // 使用相对路径，这样资源会相对于HTML文件位置加载
       server: {
         port: 3000,
         host: 'localhost',
