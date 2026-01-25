@@ -1,8 +1,8 @@
 import { MixDesignResult, MixGrade, SlumpType, SeasonType, RawMaterialsData } from "../types";
 
 // 后端工作流API配置
-const WORKFLOW_API_URL = 'DifyWorkflowHandler.ashx';
-const WORKFLOW_ID = 'CBA3740E-CF84-261D-ED20-6768DA4948DC';
+const WORKFLOW_API_URL = '/DifyWorkflowHandler.ashx';
+const WORKFLOW_ID = 'cba3740e-cf84-261d-ed20-6768da4948dc';
 
 // 生产环境检测
 const isProduction = import.meta.env?.PROD || false;

@@ -1,83 +1,30 @@
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { readFileSync } from 'fs';
 
-export default defineConfig(({ mode }) => {
-    // 使用 __dirname 确保从配置文件所在目录加载环境变量
-    const root = path.resolve(__dirname);
-    const env = loadEnv(mode, root, '');
-    
-    // 如果 loadEnv 没有加载到，尝试直接读取 .env.local 文件
-    let apiKey = env.DEEPSEEK_API_KEY || '';
-    
-    if (!apiKey) {
-      const possiblePaths = [
-        path.resolve(root, '.env.local'),
-        path.resolve(process.cwd(), '.env.local'),
-        path.join(__dirname, '.env.local'),
-        '.env.local'
-      ];
-      
-      for (const envLocalPath of possiblePaths) {
-        try {
-          const envContent = readFileSync(envLocalPath, 'utf-8');
-          const lines = envContent.split(/\r?\n/);
-          
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            // 跳过空行和注释
-            if (!line || line.startsWith('#')) continue;
-            
-            // 移除 BOM 字符（UTF-8 BOM: \uFEFF）
-            const cleanLine = line.replace(/^\uFEFF/, '').trim();
-            
-            // 使用 includes 而不是 startsWith，因为可能有 BOM 或其他字符
-            if (cleanLine.includes('DEEPSEEK_API_KEY=')) {
-              const parts = cleanLine.split('=');
-              if (parts.length >= 2) {
-                apiKey = parts.slice(1).join('=').trim();
-                // 处理可能的引号
-                apiKey = apiKey.replace(/^["']|["']$/g, '');
-                break;
-              }
-            }
-          }
-          
-          if (apiKey) break;
-        } catch (error: any) {
-          // 静默失败，尝试下一个路径
-        }
+export default defineConfig({
+  base: './', // 使用相对路径，这样资源会相对于HTML文件位置加载
+  server: {
+    port: 5173, // Vite 前端启动端口
+    proxy: {
+      // 🎯 核心配置：精准匹配你的 API URL 常量
+      '/DifyWorkflowHandler.ashx': {
+        // ⚠️ 注意：这里必须填你后端真实的运行地址和端口
+        // 如果是 .NET Core / IIS Express，通常是 5000, 5001, 443xx 等
+        target: 'http://localhost:5000',
+
+        changeOrigin: true, // 允许跨域，修改 Host 头欺骗后端
+        secure: false,      // 如果后端是 https (localhost自签名证书)，建议设为 false 避免报错
+
+        // 不需要 rewrite，因为你的后端确实就叫 DifyWorkflowHandler.ashx
+        // 除非后端在某个子目录下，比如 /api/DifyWorkflowHandler.ashx
       }
     }
-    
-    // 只显示最终状态
-    if (apiKey) {
-      console.log('✅ API密钥已加载');
-    } else {
-      console.warn('⚠️ 警告: 未找到 DEEPSEEK_API_KEY');
+  },
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, '.'),
     }
-    
-    return {
-      base: './', // 使用相对路径，这样资源会相对于HTML文件位置加载
-      server: {
-        port: 3000,
-        host: 'localhost',
-        hmr: {
-          host: 'localhost',
-          port: 3000,
-        },
-      },
-      plugins: [react()],
-      define: {
-        'process.env.DEEPSEEK_API_KEY': JSON.stringify(apiKey),
-        'process.env.API_KEY': JSON.stringify(apiKey),
-        'import.meta.env.VITE_DEEPSEEK_API_KEY': JSON.stringify(apiKey),
-      },
-      resolve: {
-        alias: {
-          '@': path.resolve(__dirname, '.'),
-        }
-      }
-    };
+  }
 });
