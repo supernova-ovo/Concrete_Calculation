@@ -8,16 +8,13 @@ export default defineConfig({
     port: 5173, // Vite 前端启动端口
     proxy: {
       // 🎯 核心配置：精准匹配你的 API URL 常量
-      '/DifyWorkflowHandler.ashx': {
+      '/jetopcms': {
         // ⚠️ 注意：这里必须填你后端真实的运行地址和端口
         // 如果是 .NET Core / IIS Express，通常是 5000, 5001, 443xx 等
-        target: 'http://localhost:5000',
+        target: 'https://test1.tepc.cn',
 
         changeOrigin: true, // 允许跨域，修改 Host 头欺骗后端
         secure: false,      // 如果后端是 https (localhost自签名证书)，建议设为 false 避免报错
-
-        // 不需要 rewrite，因为你的后端确实就叫 DifyWorkflowHandler.ashx
-        // 除非后端在某个子目录下，比如 /api/DifyWorkflowHandler.ashx
       }
     }
   },

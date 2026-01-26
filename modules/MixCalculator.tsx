@@ -198,6 +198,12 @@ export const MixCalculator: React.FC = () => {
   // 检测参数变化，提示需要重新计算
   useEffect(() => {
     if (result && lastCalculationParams && !loading) {
+      // 如果计算模式不一致，不进行参数比较（因为不同模式使用的参数不同）
+      if (lastCalculationParams.mode !== mode) {
+        setNeedsRecalculation(false);
+        return;
+      }
+
       let paramsChanged = false;
 
       if (mode === 'STD_DETAIL') {
@@ -226,12 +232,32 @@ export const MixCalculator: React.FC = () => {
         paramsChanged = currentParams !== lastCalculationParams.stdForm;
       } else {
         // AI模式：检测AI表单参数变化
-        const currentParams = JSON.stringify(aiForm);
-        paramsChanged = currentParams !== lastCalculationParams.aiForm;
+        // 需要判断当前是简单AI模式还是详细AI模式
+        // 简单AI模式：使用 aiForm 参数
+        // 详细AI模式：使用 detailedParams（包含 rawMaterials 等）
+        
+        if (lastCalculationParams.aiForm) {
+          // 上次是简单AI模式，当前也应该比较简单AI参数
+          const currentParams = JSON.stringify(aiForm);
+          paramsChanged = currentParams !== lastCalculationParams.aiForm;
+        } else if (lastCalculationParams.detailedParams) {
+          // 上次是详细AI模式
+          // 如果当前在简单AI模式（mode === 'AI' 且没有切换到详细参数输入界面），
+          // 不应该比较详细参数，因为这是不同的计算方式
+          // 只有当当前也在详细参数输入界面时，才比较详细参数
+          // 这里简化处理：如果上次是详细AI模式，但当前在简单AI模式，不触发重新计算提示
+          // （因为用户可能只是想查看简单AI模式的结果，而不是修改详细参数）
+          paramsChanged = false; // 不同计算方式，不触发重新计算提示
+        } else {
+          // 如果没有保存的参数，不触发重新计算提示
+          paramsChanged = false;
+        }
       }
 
       if (paramsChanged) {
         setNeedsRecalculation(true);
+      } else {
+        setNeedsRecalculation(false);
       }
     }
   }, [stdForm, rawMaterials, aiForm, mode, result, lastCalculationParams, loading]);
