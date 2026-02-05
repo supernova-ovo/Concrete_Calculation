@@ -18,6 +18,29 @@ const REGIONS = [
   '宁夏', '新疆'
 ];
 
+const MIX_HISTORY_SECTION_ID = '000b50bb-b343-9c74-898d-32927170539b';
+
+const encodeBase64 = (value: string) => {
+  const utf8 = encodeURIComponent(value).replace(/%([0-9A-F]{2})/g, (_, p1) =>
+    String.fromCharCode(parseInt(p1, 16))
+  );
+  return btoa(utf8);
+};
+
+const getApiBaseUrl = () => {
+  const base = import.meta.env.VITE_API_BASE_URL || '/jetopcms';
+  return base.endsWith('/') ? base.slice(0, -1) : base;
+};
+
+const getAuthToken = () => import.meta.env.VITE_AUTH_TOKEN || '';
+
+const getHandlerUrl = () => `${getApiBaseUrl()}/ks/sectionHandler.ashx`;
+
+type MixHistoryDbRow = {
+  sys_id?: string;
+  input_json?: string;
+};
+
 export const MixCalculator: React.FC = () => {
   const [mode, setMode] = useState<'AI' | 'STD_SIMPLE' | 'STD_DETAIL'>('STD_SIMPLE');
   const [loading, setLoading] = useState(false);
@@ -324,15 +347,134 @@ export const MixCalculator: React.FC = () => {
   ]);
 
   useEffect(() => {
-    const saved = localStorage.getItem('concrete_mix_history');
-    if (saved) {
+    const load = async () => {
       try {
-        setHistory(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse history", e);
+        const token = getAuthToken();
+        if (token) {
+          const handlerUrl = getHandlerUrl();
+          const formData = new FormData();
+          formData.append('id', MIX_HISTORY_SECTION_ID);
+          formData.append('mode', 'query');
+          formData.append('_pageindex', '1');
+          formData.append('_pagesize', '50');
+          const response = await fetch(handlerUrl, {
+            method: 'POST',
+            headers: {
+              'X-JetopDebug-User': token
+            },
+            body: formData
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data && (data.STATUS === 'Success' || data.STATUS === 'OK') && Array.isArray(data.ROWS)) {
+              const items: MixHistoryItem[] = [];
+              data.ROWS.forEach((row: MixHistoryDbRow) => {
+                if (!row || !row.input_json) {
+                  return;
+                }
+                try {
+                  const parsed = JSON.parse(row.input_json) as MixHistoryItem;
+                  if (row.sys_id) {
+                    parsed.id = row.sys_id;
+                  }
+                  items.push(parsed);
+                } catch (err) {
+                  console.error('解析历史记录失败', err);
+                }
+              });
+              if (items.length > 0) {
+                items.sort((a, b) => b.timestamp - a.timestamp);
+                setHistory(items);
+                localStorage.setItem('concrete_mix_history', JSON.stringify(items));
+                return;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('从数据库加载历史记录失败', error);
       }
-    }
+      const saved = localStorage.getItem('concrete_mix_history');
+      if (saved) {
+        try {
+          setHistory(JSON.parse(saved));
+        } catch (e) {
+          console.error("Failed to parse history", e);
+        }
+      }
+    };
+    load();
   }, []);
+
+  const saveHistoryToDatabase = async (item: MixHistoryItem) => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        return;
+      }
+      const handlerUrl = getHandlerUrl();
+      const record = {
+        sys_id: item.id,
+        input_json: JSON.stringify(item)
+      };
+      const payload = { inserted: [record] };
+      const encoded = encodeBase64(JSON.stringify(payload));
+      const formData = new FormData();
+      formData.append('id', MIX_HISTORY_SECTION_ID);
+      formData.append('mode', 'insert');
+      formData.append('data', encoded);
+      const response = await fetch(handlerUrl, {
+        method: 'POST',
+        headers: {
+          'X-JetopDebug-User': token
+        },
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const result = await response.json();
+      if (result.STATUS !== 'Success' && result.STATUS !== 'OK') {
+        const message = typeof result.MESSAGE === 'string' ? result.MESSAGE : '';
+        throw new Error(message || '保存失败');
+      }
+    } catch (error) {
+      console.error('保存历史记录到数据库失败', error);
+    }
+  };
+
+  const deleteHistoryFromDatabase = async (sysId: string) => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        return;
+      }
+      const handlerUrl = getHandlerUrl();
+      const payload = { deleted: [{ sys_id: sysId }] };
+      const encoded = encodeBase64(JSON.stringify(payload));
+      const formData = new FormData();
+      formData.append('id', MIX_HISTORY_SECTION_ID);
+      formData.append('mode', 'remove');
+      formData.append('data', encoded);
+      const response = await fetch(handlerUrl, {
+        method: 'POST',
+        headers: {
+          'X-JetopDebug-User': token
+        },
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const result = await response.json();
+      if (result.STATUS !== 'Success' && result.STATUS !== 'OK') {
+        const message = typeof result.MESSAGE === 'string' ? result.MESSAGE : '';
+        throw new Error(message || '删除失败');
+      }
+    } catch (error) {
+      console.error('从数据库删除历史记录失败', error);
+    }
+  };
 
   const saveHistory = () => {
     if (!result) return;
@@ -344,8 +486,9 @@ export const MixCalculator: React.FC = () => {
       region: aiForm.region,
       season: aiForm.season
     };
+    const sysId = crypto.randomUUID();
     const newItem: MixHistoryItem = {
-      id: crypto.randomUUID(),
+      id: sysId,
       timestamp: Date.now(),
       formData: historyFormData,
       result: { ...result }
@@ -360,13 +503,15 @@ export const MixCalculator: React.FC = () => {
     const newHistory = history.filter(item => item.id !== id);
     setHistory(newHistory);
     localStorage.setItem('concrete_mix_history', JSON.stringify(newHistory));
+    deleteHistoryFromDatabase(id);
   };
 
   const loadHistoryItem = (item: MixHistoryItem) => {
-    setMode('AI');
-    setAiForm({ ...aiForm, ...item.formData });
     setResult(item.result);
     setStdResultDetails(null);
+    setNeedsRecalculation(false);
+    setLastCalculationParams(null);
+    setResultCalculationMode(null);
   };
 
   const handleAiCalculate = async () => {
