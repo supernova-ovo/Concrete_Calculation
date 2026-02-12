@@ -58,6 +58,8 @@ export interface MixHistoryItem {
     season: SeasonType;
   };
   result: MixDesignResult;
+  // 计算模式（可选）：'AI' | 'STD_SIMPLE' | 'STD_DETAIL'
+  mode?: 'AI' | 'STD_SIMPLE' | 'STD_DETAIL';
 }
 
 // Navigation View State

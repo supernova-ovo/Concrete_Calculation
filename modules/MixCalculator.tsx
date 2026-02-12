@@ -7,6 +7,14 @@ import { getIntelligentMixRecommendation, getDetailedIntelligentMixRecommendatio
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { calculateMixDesign, MixDesignInput, getWaterDemand, getFlyAshFactor, getSlagPowderFactor } from '../utils/mixDesignCalculator';
 
+// Helper for UTF-8 safe Base64 encoding
+function toBase64(str: string) {
+  return window.btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,
+      function toSolidBytes(match, p1) {
+          return String.fromCharCode(parseInt(p1, 16));
+  }));
+}
+
 // List of major regions in China for dropdown
 const REGIONS = [
   '通用地区', '北京', '上海', '天津', '重庆',
@@ -50,6 +58,9 @@ export const MixCalculator: React.FC = () => {
   const [needsRecalculation, setNeedsRecalculation] = useState(false);
   const [lastCalculationParams, setLastCalculationParams] = useState<any>(null);
   const [resultCalculationMode, setResultCalculationMode] = useState<'AI' | 'STD_SIMPLE' | 'STD_DETAIL' | null>(null);
+  const [lastSavePayload, setLastSavePayload] = useState<string | null>(null);
+  const [lastSaveFinalPayload, setLastSaveFinalPayload] = useState<string | null>(null);
+  const [pendingSaveItem, setPendingSaveItem] = useState<MixHistoryItem | null>(null);
 
   // AI Mode Form Data
   const [aiForm, setAiForm] = useState({
@@ -408,38 +419,65 @@ export const MixCalculator: React.FC = () => {
 
   const saveHistoryToDatabase = async (item: MixHistoryItem) => {
     try {
+      console.info('开始将历史记录保存到数据库（data数组格式）...');
       const token = getAuthToken();
       if (!token) {
-        return;
+        throw new Error('未配置认证令牌 (VITE_AUTH_TOKEN)');
       }
       const handlerUrl = getHandlerUrl();
-      const record = {
+
+      // 合并成后端期望的单条记录（sys_id 作为主键）
+      const mergedRow: any = {
         sys_id: item.id,
-        input_json: JSON.stringify(item)
+        timestamp: item.timestamp,
+        ...item.formData,
+        ...item.result
       };
-      const payload = { inserted: [record] };
-      const encoded = encodeBase64(JSON.stringify(payload));
-      const formData = new FormData();
-      formData.append('id', MIX_HISTORY_SECTION_ID);
-      formData.append('mode', 'insert');
-      formData.append('data', encoded);
+
+      const dataArray = [mergedRow];
+      const payload = { inserted: dataArray };
+      const jsonStr = JSON.stringify(payload);
+      const base64Data = toBase64(jsonStr);
+
+      const params = new URLSearchParams();
+      params.append('id', MIX_HISTORY_SECTION_ID);
+      params.append('mode', 'update');
+      params.append('_p_data', base64Data);
+
       const response = await fetch(handlerUrl, {
         method: 'POST',
         headers: {
-          'X-JetopDebug-User': token
+          'X-JetopDebug-User': token,
+          'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: formData
+        body: params.toString()
       });
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      const result = await response.json();
+
+      const rawText = await response.text();
+      console.debug('saveHistoryToDatabase raw response:', rawText);
+
+      let result: any;
+      try {
+        result = JSON.parse(rawText);
+      } catch (e) {
+        // 如果服务器返回空数组或其他非 JSON，抛出以便上层可见响应
+        throw new Error('无法解析后端响应: ' + rawText);
+      }
+
       if (result.STATUS !== 'Success' && result.STATUS !== 'OK') {
         const message = typeof result.MESSAGE === 'string' ? result.MESSAGE : '';
         throw new Error(message || '保存失败');
       }
-    } catch (error) {
+
+      console.info('历史记录已成功保存到数据库。');
+      return result;
+    } catch (error: any) {
       console.error('保存历史记录到数据库失败', error);
+      throw error;
     }
   };
 
@@ -451,17 +489,20 @@ export const MixCalculator: React.FC = () => {
       }
       const handlerUrl = getHandlerUrl();
       const payload = { deleted: [{ sys_id: sysId }] };
-      const encoded = encodeBase64(JSON.stringify(payload));
-      const formData = new FormData();
-      formData.append('id', MIX_HISTORY_SECTION_ID);
-      formData.append('mode', 'remove');
-      formData.append('data', encoded);
+      const encoded = toBase64(JSON.stringify(payload));
+      
+      const params = new URLSearchParams();
+      params.append('id', MIX_HISTORY_SECTION_ID);
+      params.append('mode', 'remove');
+      params.append('_p_data', encoded);
+
       const response = await fetch(handlerUrl, {
         method: 'POST',
         headers: {
-          'X-JetopDebug-User': token
+          'X-JetopDebug-User': token,
+          'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: formData
+        body: params.toString()
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -476,7 +517,7 @@ export const MixCalculator: React.FC = () => {
     }
   };
 
-  const saveHistory = () => {
+  const saveHistory = async () => {
     if (!result) return;
     const historyFormData = {
       grade: (mode === 'AI' ? aiForm.grade : stdForm.gradeStr as MixGrade) || MixGrade.C30,
@@ -491,11 +532,84 @@ export const MixCalculator: React.FC = () => {
       id: sysId,
       timestamp: Date.now(),
       formData: historyFormData,
-      result: { ...result }
+      result: { ...result },
+      mode: resultCalculationMode || mode
     };
     const newHistory = [newItem, ...history];
     setHistory(newHistory);
     localStorage.setItem('concrete_mix_history', JSON.stringify(newHistory));
+
+    const mergedRow: any = {
+      sys_id: newItem.id,
+      timestamp: newItem.timestamp,
+      grade: newItem.formData.grade,
+      slump: newItem.formData.slump,
+      maxSize: newItem.formData.maxSize,
+      region: newItem.formData.region,
+      season: newItem.formData.season,
+      ...newItem.result
+    };
+
+    const payloadJson = {
+      id: MIX_HISTORY_SECTION_ID,
+      data: {
+        updated: [mergedRow]
+      }
+    };
+    setLastSavePayload(JSON.stringify(payloadJson, null, 2));
+    const mapKey = (k: string) => {
+      const m: Record<string, string> = {
+        grade: 'strength_grade',
+        slump: 'slump_mm',
+        maxSize: 'max_size_mm',
+        region: 'region',
+        season: 'season',
+        flyAsh: 'fly_ash',
+        slag: 'slag_powder',
+        sandRatio: 'sand_ratio',
+        strengthGrade: 'strength_grade',
+        referencedStandards: 'referenced_standards',
+        timestamp: 'created_at'
+      };
+      return m[k] || k;
+    };
+
+    const mapped: Record<string, any> = {};
+    Object.keys(mergedRow).forEach(k => {
+      const key = mapKey(k);
+      let val = (mergedRow as any)[k];
+      if (key === 'referenced_standards' && Array.isArray(val)) {
+        val = JSON.stringify(val);
+      }
+      if (key === 'created_at' && typeof val === 'number') {
+        val = new Date(val).toISOString();
+      }
+      if (key === 'slump_mm' && typeof val === 'string') {
+        // extract integer from string (e.g. "160-200mm" -> 160)
+        const match = val.match(/\d+/);
+        if (match) {
+          val = parseInt(match[0], 10);
+        } else {
+          val = 0;
+        }
+      }
+      mapped[key] = val;
+    });
+
+    mapped.input_json = JSON.stringify(newItem);
+
+    if (!mapped.sys_id) mapped.sys_id = newItem.id;
+
+    const finalPayload = {
+      id: MIX_HISTORY_SECTION_ID,
+      mode: 'update',
+      data: {
+        updated: [mapped]
+      }
+    };
+    setLastSaveFinalPayload(JSON.stringify(finalPayload, null, 2));
+    // keep pending item for submission when user confirms
+    setPendingSaveItem(newItem);
   };
 
   const deleteHistoryItem = (id: string, e: React.MouseEvent) => {
@@ -538,13 +652,7 @@ export const MixCalculator: React.FC = () => {
     } catch (e: any) {
       console.error("AI计算错误详情:", e);
       const errorMessage = e?.message || "未知错误";
-      if (errorMessage.includes("API key") || errorMessage.includes("DEEPSEEK_API_KEY")) {
-        alert("❌ API密钥未配置！\n\n请在项目根目录创建 .env.local 文件，并添加：\nDEEPSEEK_API_KEY=你的API密钥\n\n配置后请重启开发服务器。");
-      } else if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
-        alert("❌ API密钥无效！\n\n请检查 .env.local 文件中的 DEEPSEEK_API_KEY 是否正确。");
-      } else if (errorMessage.includes("429") || errorMessage.includes("rate limit")) {
-        alert("❌ API调用频率超限！\n\n请稍后再试，或检查你的 DeepSeek API 配额。");
-      } else if (errorMessage.includes("network") || errorMessage.includes("fetch")) {
+      if (errorMessage.includes("network") || errorMessage.includes("fetch")) {
         alert("❌ 网络连接失败！\n\n请检查网络连接，或稍后重试。\n\n错误详情：" + errorMessage);
       } else {
         alert("❌ 智能配比计算失败！\n\n错误信息：" + errorMessage + "\n\n请检查浏览器控制台（F12）查看详细错误。");
@@ -592,13 +700,7 @@ export const MixCalculator: React.FC = () => {
     } catch (e: any) {
       console.error("详细参数AI计算错误详情:", e);
       const errorMessage = e?.message || "未知错误";
-      if (errorMessage.includes("API key") || errorMessage.includes("DEEPSEEK_API_KEY")) {
-        alert("❌ API密钥未配置！\n\n请在项目根目录创建 .env.local 文件，并添加：\nDEEPSEEK_API_KEY=你的API密钥\n\n配置后请重启开发服务器。");
-      } else if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
-        alert("❌ API密钥无效！\n\n请检查 .env.local 文件中的 DEEPSEEK_API_KEY 是否正确。");
-      } else if (errorMessage.includes("429") || errorMessage.includes("rate limit")) {
-        alert("❌ API调用频率超限！\n\n请稍后再试，或检查你的 DeepSeek API 配额。");
-      } else if (errorMessage.includes("network") || errorMessage.includes("fetch")) {
+      if (errorMessage.includes("network") || errorMessage.includes("fetch")) {
         alert("❌ 网络连接失败！\n\n请检查网络连接，或稍后重试。\n\n错误详情：" + errorMessage);
       } else {
         alert("❌ 智能配比计算失败！\n\n错误信息：" + errorMessage + "\n\n请检查浏览器控制台（F12）查看详细错误。");
@@ -998,6 +1100,60 @@ export const MixCalculator: React.FC = () => {
       </div>
 
       <div className="flex-1 flex flex-col xl:flex-row gap-4 overflow-hidden min-h-0">
+        {/* Debug panel: show last save payload */}
+          {lastSavePayload && (
+            <div className="w-full p-3 bg-yellow-50 border border-yellow-200 rounded mb-2">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-medium">上次尝试写入的 JSON Payload</div>
+                <div className="flex items-center gap-2">
+                  {lastSaveFinalPayload && (
+                    <button className="text-xs text-slate-600 hover:underline" onClick={() => { setLastSaveFinalPayload(null); setPendingSaveItem(null); }}>取消</button>
+                  )}
+                  <button className="text-xs text-slate-600 hover:underline" onClick={() => setLastSavePayload(null)}>关闭</button>
+                </div>
+              </div>
+              <pre className="text-xs max-h-48 overflow-auto whitespace-pre-wrap">{lastSavePayload}</pre>
+              {lastSaveFinalPayload && (
+                <div className="mt-3 p-2 bg-white border border-slate-100 rounded">
+                  <div className="text-sm font-medium mb-1">最终写入表结构（映射后）</div>
+                  <pre className="text-xs max-h-48 overflow-auto whitespace-pre-wrap">{lastSaveFinalPayload}</pre>
+                  <div className="flex gap-2 mt-2">
+                    <Button onClick={async () => {
+                      // submit final payload
+                      try {
+                        if (!lastSaveFinalPayload) return;
+                        const parsed = JSON.parse(lastSaveFinalPayload);
+                        const handlerUrl = getHandlerUrl();
+                        const token = getAuthToken();
+                        const params = new URLSearchParams();
+                        params.append('id', parsed.id);
+                        params.append('mode', parsed.mode);
+                        const jsonStr = JSON.stringify(parsed.data);
+                        params.append('_p_data', toBase64(jsonStr));
+                        const resp = await fetch(handlerUrl, { method: 'POST', headers: { 'X-JetopDebug-User': token, 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() });
+                        const text = await resp.text();
+                        try {
+                          const json = JSON.parse(text);
+                          if (json.STATUS === 'Success' || json.STATUS === 'OK') {
+                            alert('保存成功');
+                            setLastSaveFinalPayload(null);
+                            setLastSavePayload(null);
+                            setPendingSaveItem(null);
+                          } else {
+                            alert('保存失败: ' + (json.MESSAGE || text));
+                          }
+                        } catch (e) {
+                          alert('保存失败，服务器返回: ' + text);
+                        }
+                      } catch (err: any) {
+                        alert('提交失败: ' + (err?.message || err));
+                      }
+                    }} className="!px-3 !py-1">确认并提交到服务器</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         {/* Left: Input Panel */}
         <div className="xl:w-[420px] flex-shrink-0 flex flex-col gap-4 overflow-y-auto pr-1">
           {mode === 'AI' ? (
@@ -1197,7 +1353,7 @@ export const MixCalculator: React.FC = () => {
               {history.slice(0, 5).map(item => (
                 <div key={item.id} onClick={() => loadHistoryItem(item)} className="flex items-center justify-between p-2 rounded bg-concrete-50 border border-concrete-100 hover:bg-primary-50 hover:border-primary-100 cursor-pointer text-xs">
                   <div>
-                    <div className="font-bold text-concrete-700">{item.formData.grade} <span className="font-normal text-concrete-400">| {new Date(item.timestamp).toLocaleDateString()}</span></div>
+                    <div className="font-bold text-concrete-700">{item.formData?.grade || item.result?.strengthGrade || '未知等级'} <span className="font-normal text-concrete-400">| {item.timestamp ? new Date(item.timestamp).toLocaleDateString() : ''}</span></div>
                   </div>
                   <Trash2 className="w-3 h-3 text-concrete-300 hover:text-red-400" onClick={(e) => deleteHistoryItem(item.id, e)} />
                 </div>
